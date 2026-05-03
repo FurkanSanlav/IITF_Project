@@ -204,6 +204,7 @@ class TelemetryDataset(Dataset):
         root_dir: Path,
         scaler: TraceScaler,
         seq_len: int = 60,
+        window_stride: int = 1,
         feature_columns: Optional[List[str]] = None,
         file_limit: Optional[int] = None,
     ) -> None:
@@ -211,6 +212,7 @@ class TelemetryDataset(Dataset):
         self.root_dir = Path(root_dir)
         self.scaler = scaler
         self.seq_len = seq_len
+        self.window_stride = window_stride
         self.feature_columns = feature_columns
 
         # ---- Index all file paths ------------------------------------------
@@ -225,7 +227,7 @@ class TelemetryDataset(Dataset):
             if not trace_dir.exists():
                 logger.warning("Trace directory not found: %s", trace_dir)
                 continue
-            csv_files = sorted(trace_dir.glob("*.csv"))
+            csv_files = sorted(trace_dir.rglob("*.csv"))
             if file_limit:
                 csv_files = csv_files[:file_limit]
             for fp in csv_files:
@@ -235,14 +237,14 @@ class TelemetryDataset(Dataset):
         #   For each file we count how many valid windows it contributes.
         #   We record (file_idx, window_start_row) for every window.
         self._samples: list[tuple[int, int]] = []   # (file_idx, start_row)
-        self._row_cache: dict[int, pd.DataFrame] = {}   # file_idx → dataframe
+        self._row_cache: dict[int, Optional[np.ndarray]] = {}   # file_idx → array
         # Pre-scan row counts without loading data fully.
         self._file_row_counts: list[int] = []
         for file_idx, (fp, _) in enumerate(self._file_records):
             n_rows = _count_csv_rows(fp)
             self._file_row_counts.append(n_rows)
             n_windows = max(0, n_rows - seq_len)   # seq_len rows → 1 window
-            for start in range(n_windows):
+            for start in range(0, n_windows, self.window_stride):
                 self._samples.append((file_idx, start))
 
         logger.info(
@@ -268,15 +270,15 @@ class TelemetryDataset(Dataset):
         file_idx, start_row = self._samples[idx]
         fp, trace_name = self._file_records[file_idx]
 
-        df = self._get_df(file_idx, fp, trace_name)
-        if df is None or len(df) < self.seq_len + 1:
+        arr = self._get_array(file_idx, fp, trace_name)
+        if arr is None or len(arr) < self.seq_len + 1:
             # Graceful fallback: return zeros
             n_feat = len(self.feature_columns) if self.feature_columns else 1
             x = torch.zeros(self.seq_len, n_feat, dtype=_DTYPE)
             y = torch.zeros(n_feat, dtype=_DTYPE)
             return x, TRACE_ID[trace_name], y
 
-        window = df.iloc[start_row : start_row + self.seq_len + 1].values  # (T+1, F)
+        window = arr[start_row : start_row + self.seq_len + 1]  # (T+1, F)
         x_np = window[:self.seq_len]     # (seq_len, F)
         y_np = window[self.seq_len]      # (F,)
 
@@ -291,13 +293,16 @@ class TelemetryDataset(Dataset):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _get_df(
+    def _get_array(
         self, file_idx: int, fp: Path, trace_name: str
-    ) -> Optional[pd.DataFrame]:
-        """Lazy-load a DataFrame, caching it for repeated window lookups."""
+    ) -> Optional[np.ndarray]:
+        """Lazy-load a CSV and cache it as a pure NumPy array for speed."""
         if file_idx not in self._row_cache:
             df = _safe_read_csv(fp, columns=self.feature_columns)
-            self._row_cache[file_idx] = df   # may be None
+            if df is None or df.empty:
+                self._row_cache[file_idx] = None
+            else:
+                self._row_cache[file_idx] = df.values.astype(np.float32)
         return self._row_cache[file_idx]
 
     # ---- Introspection helpers -------------------------------------------
@@ -333,6 +338,7 @@ class TelemetryDataset(Dataset):
 def get_dataloaders(
     root_dir: str | Path = ".",
     seq_len: int = 60,
+    window_stride: int = 1,
     batch_size: int = 64,
     train_split: float = 0.7,
     val_split: float = 0.15,
@@ -394,7 +400,7 @@ def get_dataloaders(
             split_files[trace_name] = {"train": [], "val": [], "test": []}
             continue
 
-        all_files = sorted(trace_dir.glob("*.csv"))
+        all_files = sorted(trace_dir.rglob("*.csv"))
         if file_limit:
             all_files = all_files[:file_limit]
 
@@ -434,6 +440,7 @@ def get_dataloaders(
             root_dir=root_dir,
             scaler=scaler,
             seq_len=seq_len,
+            window_stride=window_stride,
             feature_columns=feature_columns,
             file_paths_by_trace={
                 trace: split_files[trace][split] for trace in TRACE_ID
@@ -491,6 +498,7 @@ class _FilteredTelemetryDataset(TelemetryDataset):
         root_dir: Path,
         scaler: TraceScaler,
         seq_len: int,
+        window_stride: int,
         feature_columns: Optional[List[str]],
         file_paths_by_trace: dict[str, list[Path]],
     ) -> None:
@@ -499,6 +507,7 @@ class _FilteredTelemetryDataset(TelemetryDataset):
         self.root_dir = root_dir
         self.scaler = scaler
         self.seq_len = seq_len
+        self.window_stride = window_stride
         self.feature_columns = feature_columns
 
         self._file_records: list[tuple[Path, str]] = []
@@ -508,12 +517,12 @@ class _FilteredTelemetryDataset(TelemetryDataset):
 
         self._samples: list[tuple[int, int]] = []
         self._file_row_counts: list[int] = []
-        self._row_cache: dict[int, Optional[pd.DataFrame]] = {}
+        self._row_cache: dict[int, Optional[np.ndarray]] = {}
 
         for file_idx, (fp, _) in enumerate(self._file_records):
             n_rows = _count_csv_rows(fp)
             self._file_row_counts.append(n_rows)
-            for start in range(max(0, n_rows - seq_len)):
+            for start in range(0, max(0, n_rows - seq_len), self.window_stride):
                 self._samples.append((file_idx, start))
 
         logger.debug(
@@ -554,7 +563,13 @@ def _safe_read_csv(
         logger.warning("File not found, skipping: %s", fp)
         return None
     try:
-        df = pd.read_csv(fp, engine="c", low_memory=False)
+        # The Grid Workloads Archive uses semicolons with tab-padded headers
+        df = pd.read_csv(fp, sep=";", engine="c", low_memory=False)
+        df.columns = df.columns.str.strip()
+        if len(df.columns) == 1:
+            # Fallback to standard comma separated if semicolon parsed as 1 column
+            df = pd.read_csv(fp, sep=",", engine="c", low_memory=False)
+            df.columns = df.columns.str.strip()
     except Exception as exc:
         logger.warning("Could not read '%s': %s", fp, exc)
         return None

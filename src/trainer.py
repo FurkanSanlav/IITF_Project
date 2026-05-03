@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -43,6 +44,11 @@ class Trainer:
         Directory where ``best_model.pth`` and ``last_model.pth`` are written.
     grad_clip_norm:
         Maximum L2 norm for gradient clipping.  ``None`` disables clipping.
+    lr_scheduler:
+        Optional learning-rate scheduler.  ``ReduceLROnPlateau`` is the
+        recommended choice; it is stepped with the validation loss at the
+        end of every epoch.  Any other ``LRScheduler`` is stepped without
+        arguments (i.e. epoch-based schedulers like ``CosineAnnealingLR``).
     """
 
     def __init__(
@@ -53,6 +59,7 @@ class Trainer:
         device: torch.device,
         save_dir: str | Path = "checkpoints",
         grad_clip_norm: Optional[float] = 1.0,
+        lr_scheduler: Optional[LRScheduler] = None,
     ) -> None:
         self.model = model
         self.optimizer = optimizer
@@ -60,6 +67,7 @@ class Trainer:
         self.device = device
         self.save_dir = Path(save_dir)
         self.grad_clip_norm = grad_clip_norm
+        self.lr_scheduler = lr_scheduler
 
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self._best_val_loss: float = float("inf")
@@ -184,6 +192,22 @@ class Trainer:
             history["train_loss"].append(train_loss)
             history["val_loss"].append(val_loss)
 
+            # ── LR scheduler step ─────────────────────────────────────────
+            if self.lr_scheduler is not None:
+                lr_before = self._current_lr()
+                # ReduceLROnPlateau requires the monitored metric
+                from torch.optim.lr_scheduler import ReduceLROnPlateau
+                if isinstance(self.lr_scheduler, ReduceLROnPlateau):
+                    self.lr_scheduler.step(val_loss)
+                else:
+                    self.lr_scheduler.step()
+                lr_after = self._current_lr()
+                if lr_after < lr_before - 1e-12:
+                    logger.info(
+                        "LR reduced: %.2e → %.2e (epoch %d)",
+                        lr_before, lr_after, epoch,
+                    )
+
             # ── Checkpoint saving ─────────────────────────────────────────
             self._save_checkpoint("last_model.pth", epoch, val_loss)
             improved = val_loss < self._best_val_loss
@@ -192,14 +216,16 @@ class Trainer:
                 self._save_checkpoint("best_model.pth", epoch, val_loss)
 
             if epoch % log_every == 0:
+                lr_tag = f"  lr={self._current_lr():.2e}" if self.lr_scheduler else ""
                 tag = " ★ best" if improved else ""
                 logger.info(
-                    "Epoch %3d/%d  train=%.4f  val=%.4f  (%.1fs)%s",
+                    "Epoch %3d/%d  train=%.4f  val=%.4f  (%.1fs)%s%s",
                     epoch,
                     n_epochs,
                     train_loss,
                     val_loss,
                     elapsed,
+                    lr_tag,
                     tag,
                 )
 
@@ -215,13 +241,22 @@ class Trainer:
     def _save_checkpoint(
         self, filename: str, epoch: int, val_loss: float
     ) -> None:
-        """Persist model + optimizer state to *save_dir/filename*."""
+        """Persist model + optimizer + scheduler state to *save_dir/filename*."""
         payload = {
-            "epoch":          epoch,
-            "val_loss":       val_loss,
-            "model_state":    self.model.state_dict(),
-            "optimizer_state": self.optimizer.state_dict(),
+            "epoch":            epoch,
+            "val_loss":         val_loss,
+            "model_state":      self.model.state_dict(),
+            "optimizer_state":  self.optimizer.state_dict(),
+            "scheduler_state":  (
+                self.lr_scheduler.state_dict()
+                if self.lr_scheduler is not None
+                else None
+            ),
         }
         path = self.save_dir / filename
         torch.save(payload, path)
         logger.debug("Checkpoint saved → %s", path)
+
+    def _current_lr(self) -> float:
+        """Return the current learning rate of the first param group."""
+        return self.optimizer.param_groups[0]["lr"]

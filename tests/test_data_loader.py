@@ -444,6 +444,7 @@ class TestFilteredDataset:
             root_dir=raw_dir,
             scaler=fitted_scaler,
             seq_len=SEQ_LEN,
+            window_stride=1,
             feature_columns=None,
             file_paths_by_trace={"fastStorage": fs_files, "rnd": rnd_files},
         )

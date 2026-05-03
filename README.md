@@ -1,8 +1,8 @@
 # IITF-Project: Dual-Trace Telemetry Forecasting
 
-**Author:** Furkan Sanlav
-**Institution:** Hacettepe University, AI Engineering
-**Project Phase:** 1 (Baseline Development)
+- **Author:** Furkan Sanlav
+- **Institution:** Hacettepe University, AI Engineering
+- **Project Phase:** 1 (Baseline Development)
 
 ## 📌 Project Overview
 The **Industrial IoT Telemetry Forecasting (IITF)** project addresses resource demand prediction using the **Bitbrains GWA-T-12** dataset. The system utilizes a specialized **Dual-Trace LSTM** architecture to model two distinct telemetry distributions: stable workloads (`fastStorage`) and volatile, bursty workloads (`rnd`).

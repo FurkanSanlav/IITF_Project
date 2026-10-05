@@ -5,7 +5,7 @@
 - **Project Phase:** 1 (Baseline Development)
 
 ## 📌 Project Overview
-The **Industrial IoT Telemetry Forecasting (IITF)** project addresses resource demand prediction using the **Bitbrains GWA-T-12** dataset. The system utilizes a specialized **Dual-Trace LSTM** architecture to model two distinct telemetry distributions: stable workloads (`fastStorage`) and volatile, bursty workloads (`rnd`).
+**IITF (Infrastructure Intelligence & Telemetry Forecasting)** forecasts cloud VM resource demand using the **Bitbrains GWA-T-12** dataset: 1,750 VMs (1,250 `fastStorage` + 500 `rnd`) sampled every 5 minutes. A **Dual-Trace LSTM** built in **PyTorch** models two telemetry distributions in a single network: stable workloads (`fastStorage`) and volatile, bursty workloads (`rnd`).
 
 ## 🛰️ Future Roadmap
 *   **Phase 2: Attention Mechanism Integration**
@@ -16,7 +16,7 @@ The **Industrial IoT Telemetry Forecasting (IITF)** project addresses resource d
 ## 🚀 Technical Architecture
 *   **Dual-Trace Modeling:** An LSTM network designed with Trace ID embeddings to differentiate between varied telemetry source behaviors.
 *   **Data Pipeline:** Implementation of sliding window sequences with configurable strides to manage temporal dependencies.
-*   **Objective Function:** Utilization of **Huber Loss** to provide robustness against outliers and spikes inherent in industrial telemetry.
+*   **Objective Function:** Utilization of **Huber Loss** to provide robustness against outliers and spikes inherent in VM telemetry.
 *   **Optimization:** Integration of `ReduceLROnPlateau` for learning rate adjustment and gradient norm clipping to ensure training stability.
 
 ## 📊 Performance Benchmarks
@@ -53,26 +53,46 @@ IITF_Project/
 │   ├── model.py         # DualTraceLSTM architecture definition
 │   ├── trainer.py       # Training loop and checkpoint logic
 │   └── evaluate.py      # Multi-trace performance metrics
-├── tests/               # Automated verification suite (97+ tests)
+├── tests/               # Automated verification suite (98 pytest tests)
 │   ├── test_data_loader.py
 │   └── test_model.py
-├── checkpoints/         # Serialized model weights and config logs
+├── checkpoints/         # Model weights and config (created at runtime, git-ignored)
 ├── docs/                # Technical blueprints and design documents
 ├── main.py              # End-to-end execution entry point
 └── pyproject.toml       # Environment and dependency definitions
 ```
 
 ## 🛠️ Installation and Execution
-This project utilizes `uv` for dependency management.
+This project uses [`uv`](https://github.com/astral-sh/uv) for dependency management (Python 3.12).
 
 ```bash
 # Clone the repository
-git clone [https://github.com/FurkanSanlav/IITF_Project.git](https://github.com/FurkanSanlav/IITF_Project.git)
+git clone https://github.com/FurkanSanlav/IITF_Project.git
 cd IITF_Project
 
-# Synchronize environment
+# Install dependencies
 uv sync
-
-# Execute training and evaluation
-uv run main.py --config checkpoints/config.json
 ```
+
+### Dataset setup
+The dataset is not included in the repository. Download the **GWA-T-12 Bitbrains** trace from the [Grid Workloads Archive](http://gwa.ewi.tudelft.nl/datasets/gwa-t-12-bitbrains) and place the per-VM CSV files as follows:
+
+```text
+data/raw/fastStorage/   ← 1,250 VM CSVs
+data/raw/rnd/           ← 500 VM CSVs
+```
+
+### Run
+```bash
+# Train and evaluate with default hyperparameters
+uv run main.py
+
+# Re-run with a saved configuration (written to checkpoints/ after a run)
+uv run main.py --config checkpoints/config.json
+
+# Run the test suite
+uv run pytest
+```
+
+## 📄 License
+Released under the [MIT License](LICENSE).
